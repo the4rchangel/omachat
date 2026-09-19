@@ -1,0 +1,87 @@
+#!/bin/bash
+# omachat-service — install/start/stop user systemd units (daemon + tray)
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+ROOT="$(cd "$BIN_DIR/.." && pwd)"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+usage() {
+  cat <<EOF
+Usage: omachat service <install|uninstall|start|stop|status|restart>
+EOF
+}
+
+write_units() {
+  mkdir -p "$UNIT_DIR"
+  cat >"$UNIT_DIR/omachat.service" <<EOF
+[Unit]
+Description=Omachat P2P chat daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=OMACHAT_HOME=$ROOT
+WorkingDirectory=$ROOT
+ExecStart=/usr/bin/node $ROOT/src/daemon.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
+  cat >"$UNIT_DIR/omachat-tray.service" <<EOF
+[Unit]
+Description=Omachat tray icon
+After=omachat.service graphical-session.target
+Requires=omachat.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=OMACHAT_HOME=$ROOT
+ExecStart=/usr/bin/python3 $ROOT/bin/omachat-tray
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  install)
+    write_units
+    systemctl --user daemon-reload
+    systemctl --user enable --now omachat.service
+    systemctl --user enable --now omachat-tray.service
+    printf 'Omachat daemon + tray enabled.\n'
+    systemctl --user --no-pager --full status omachat.service omachat-tray.service || true
+    ;;
+  uninstall)
+    systemctl --user disable --now omachat-tray.service omachat.service 2>/dev/null || true
+    rm -f "$UNIT_DIR/omachat.service" "$UNIT_DIR/omachat-tray.service"
+    systemctl --user daemon-reload
+    printf 'Omachat user services removed.\n'
+    ;;
+  start)
+    systemctl --user start omachat.service omachat-tray.service
+    ;;
+  stop)
+    systemctl --user stop omachat-tray.service omachat.service
+    ;;
+  restart)
+    systemctl --user restart omachat.service
+    systemctl --user restart omachat-tray.service
+    ;;
+  status)
+    systemctl --user --no-pager --full status omachat.service omachat-tray.service || true
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

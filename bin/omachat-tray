@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Omachat tray icon for Omarchy SystemTray (StatusNotifier / Ayatana)."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("AyatanaAppIndicator3", "0.1")
+from gi.repository import AyatanaAppIndicator3 as AppIndicator3  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+SOCK = Path(os.environ.get("OMACHAT_SOCK") or Path(os.environ.get("XDG_RUNTIME_DIR", f"/tmp/omachat-{os.getuid()}")) / "omachat.sock")
+ICON = str(ROOT / "assets" / "omachat-tray.svg")
+if not Path(ICON).is_file():
+    ICON = "user-available"
+
+
+def sock_request(cmd: str, **fields):
+    if not SOCK.exists():
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(str(SOCK))
+            payload = {"id": 1, "cmd": cmd, **fields}
+            s.sendall((json.dumps(payload) + "\n").encode())
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+            line = buf.split(b"\n", 1)[0].decode()
+            return json.loads(line)
+    except OSError:
+        return None
+
+
+def daemon_status():
+    r = sock_request("status")
+    if not r or not r.get("ok"):
+        return None
+    return r.get("result") or {}
+
+
+def open_tui(_=None):
+    launchers = [
+        ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.omachat", "omachat"],
+        ["omarchy-launch-tui", "omachat"],
+    ]
+    for cmd in launchers:
+        if shutil.which(cmd[0]):
+            subprocess.Popen(cmd, start_new_session=True)
+            return
+    # Fallback: terminal + omachat on PATH / repo
+    term = shutil.which("alacritty") or shutil.which("kitty") or shutil.which("ghostty")
+    omachat = shutil.which("omachat") or str(ROOT / "bin" / "omachat")
+    if term:
+        subprocess.Popen([term, "-e", omachat], start_new_session=True)
+    else:
+        subprocess.Popen([omachat], start_new_session=True)
+
+
+def set_notify(mode: str):
+    sock_request("notify", mode=mode)
+
+
+def quit_daemon(_=None):
+    sock_request("quit")
+    Gtk.main_quit()
+
+
+def refresh_label(indicator, item_status):
+    st = daemon_status()
+    if not st:
+        indicator.set_label("omachat · offline", "omachat")
+        item_status.set_label("Daemon: offline")
+        return True
+    unread = sum((st.get("rooms") or {}).get(r, {}).get("unread", 0) for r in st.get("roomIds") or [])
+    peers = sum((st.get("rooms") or {}).get(r, {}).get("peers", 0) for r in st.get("roomIds") or [])
+    nick = st.get("nick") or "?"
+    label = f"omachat · {peers}p"
+    if unread:
+        label += f" · {unread} new"
+    indicator.set_label(label, "omachat")
+    rooms = ", ".join(f"#{r}" for r in (st.get("roomIds") or [])[:4])
+    item_status.set_label(f"{nick} · {peers} peers · {rooms or 'no rooms'}")
+    return True
+
+
+def build():
+    indicator = AppIndicator3.Indicator.new(
+        "omachat",
+        ICON,
+        AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+    )
+    indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+    indicator.set_title("Omachat")
+
+    menu = Gtk.Menu()
+
+    open_item = Gtk.MenuItem(label="Open chat")
+    open_item.connect("activate", open_tui)
+    menu.append(open_item)
+
+    status_item = Gtk.MenuItem(label="Daemon: …")
+    status_item.set_sensitive(False)
+    menu.append(status_item)
+
+    menu.append(Gtk.SeparatorMenuItem())
+
+    n_on = Gtk.MenuItem(label="Notifications: all rooms")
+    n_on.connect("activate", lambda *_: set_notify("on"))
+    menu.append(n_on)
+
+    n_men = Gtk.MenuItem(label="Notifications: mentions only")
+    n_men.connect("activate", lambda *_: set_notify("mentions"))
+    menu.append(n_men)
+
+    n_off = Gtk.MenuItem(label="Notifications: off")
+    n_off.connect("activate", lambda *_: set_notify("off"))
+    menu.append(n_off)
+
+    menu.append(Gtk.SeparatorMenuItem())
+
+    quit_item = Gtk.MenuItem(label="Quit Omachat daemon")
+    quit_item.connect("activate", quit_daemon)
+    menu.append(quit_item)
+
+    menu.show_all()
+    indicator.set_menu(menu)
+
+    GLib.timeout_add_seconds(3, refresh_label, indicator, status_item)
+    refresh_label(indicator, status_item)
+
+    # Left-click / activate → open TUI when supported
+    try:
+        indicator.set_secondary_activate_target(open_item)
+    except Exception:
+        pass
+
+    return indicator
+
+
+def main():
+    signal.signal(signal.SIGINT, lambda *_: Gtk.main_quit())
+    signal.signal(signal.SIGTERM, lambda *_: Gtk.main_quit())
+    build()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

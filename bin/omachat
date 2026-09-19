@@ -99,6 +99,16 @@ require_deps() {
 
 main() {
   require_deps
+
+  # Background service / daemon — no gum splash
+  if [[ ${1:-} == service ]]; then
+    shift
+    exec "$ROOT_DIR/bin/omachat-service" "$@"
+  fi
+  if [[ ${1:-} == --daemon || ${1:-} == daemon ]]; then
+    exec node "$ROOT_DIR/src/daemon.js"
+  fi
+
   show_logo
 
   local nick=""
@@ -118,6 +128,7 @@ main() {
   gum style --foreground 2 "Joining Omachat #$room as $nick…"
   sleep 0.2
   # Run the TUI directly — no tmux wrapper. The app draws its own legend.
+  # If the daemon is running, the TUI attaches and closing the window keeps you online.
   exec node "$NODE_ENTRY" --nick "$nick" "$room"
 }
 

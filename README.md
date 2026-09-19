@@ -56,6 +56,29 @@ update-desktop-database ~/.local/share/applications 2>/dev/null || true
 
 On Omarchy, the desktop entry uses `omarchy-launch-or-focus-tui` so it shows up in the app menu like other TUIs.
 
+## Background service (tray)
+
+Keep Omachat online without a terminal window — same idea as Tailscale/Remmina sitting in the Omarchy top-bar tray.
+
+```bash
+omachat service install    # systemd --user daemon + Ayatana tray icon
+omachat service status
+omachat service stop       # or: Quit from the tray menu
+omachat service uninstall
+```
+
+What you get:
+
+| Piece | Role |
+|-------|------|
+| `omachat.service` | Headless daemon — stays joined to lobby/ideas/help/ai, encrypted history, desktop notifications |
+| `omachat-tray.service` | Tray icon in Omarchy’s SystemTray — Open chat, notify mode, Quit daemon |
+| TUI attach | `omachat` / app menu opens the window against the daemon; **closing the window leaves you online** |
+
+Notifications use `omarchy-notification-send`. Tray menu can switch all-room / mentions-only / off.
+
+Requires: `python-gobject`, `libayatana-appindicator` (already common on Omarchy).
+
 ## Run
 
 ```bash

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { Session } from './session.js'
+import { RemoteSession } from './remote-session.js'
 import { HistoryStore } from './history.js'
 import { DEFAULT_ROOM, normalizeRoom, listRooms, roomTopic } from './topic.js'
 import b4a from 'b4a'
@@ -69,20 +70,24 @@ function logError(err, where = 'tui') {
  *   rooms | chat | people
  *   status / input / legend
  *
- * Stays joined to all default rooms while online; focus switches the pane.
- * Chat is persisted locally encrypted under ~/.config/omachat/history/.
+ * Prefers attaching to omachat-daemon (background service + tray).
+ * Falls back to an in-process Session if the daemon is not running.
  */
 export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('Omachat TUI needs an interactive terminal')
   }
 
-  const history = new HistoryStore(identity.seed)
-  const session = new Session({
-    identity,
-    history,
-    subscribe: ROOM_ORDER
-  })
+  let session = await RemoteSession.tryConnect()
+  let attached = Boolean(session)
+  if (!session) {
+    const history = new HistoryStore(identity.seed)
+    session = new Session({
+      identity,
+      history,
+      subscribe: ROOM_ORDER
+    })
+  }
 
   let quitting = false
   let draft = ''
@@ -169,10 +174,11 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     if (d.tailscale?.ok) bits.push('ts')
     const layers = bits.length ? bits.join('+') : 'connecting'
     const watching = session.roomIds().length
+    const mode = attached ? 'daemon' : 'local'
     return (
       `${GREEN}${BOLD}omachat${RESET} ${CYAN}${roomLabel(currentRoom())}${RESET}` +
       ` · ${peers}p · ${identity.nick}` +
-      ` · ${GRAY}${layers}:${d.port || '-'} · ${watching}r hist${RESET}`
+      ` · ${GRAY}${layers}:${d.port || '-'} · ${watching}r · ${mode}${RESET}`
     )
   }
 
@@ -296,7 +302,9 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
         case 'help':
         case '?':
           session.pushSystem('Ctrl+N/P next/prev room · F1-F4 jump · ↑↓ select · Enter open/send')
-          session.pushSystem('All default rooms stay joined while you are online; history is local+encrypted.')
+          session.pushSystem(attached
+            ? 'Attached to omachat-daemon (tray/background). Closing this window keeps you online.'
+            : 'Local session — start the daemon for background + tray: omachat service install')
           session.pushSystem('/join /rooms /peers /disco /nick /topic /quit')
           return
         case 'rooms':
@@ -337,8 +345,12 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
             return
           }
           const old = identity.nick
-          identity.nick = saveNick(arg)
-          session.announceNick(old)
+          if (attached && session.setNick) {
+            identity.nick = await session.setNick(arg)
+          } else {
+            identity.nick = saveNick(arg)
+            session.announceNick(old)
+          }
           session.pushSystem(`nick ${old} → ${identity.nick}`)
           return
         }
@@ -359,6 +371,7 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     if (quitting) return
     quitting = true
     try {
+      // Detach from daemon (leave it running) or stop local session.
       await session.stop()
     } catch (err) {
       logError(err, 'shutdown-stop')
@@ -514,7 +527,12 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
 
   hideCursor()
   await session.start(normalizeRoom(roomId))
+  if (attached && session.identity?.nick) {
+    identity.nick = session.identity.nick
+  }
   session.pushSystem(`welcome ${identity.nick}`)
-  session.pushSystem('watching lobby/ideas/help/ai · history encrypted locally · /help')
+  session.pushSystem(attached
+    ? 'attached to daemon · close window anytime · tray keeps you online'
+    : 'watching lobby/ideas/help/ai · history encrypted locally · /help')
   queueRedraw()
 }
