@@ -12,7 +12,6 @@ import b4a from 'b4a'
 import { Room } from '../src/room.js'
 
 const BOT_NICK = process.env.OMACHAT_AWAYBOT_NICK || 'archangel-awaybot'
-const OWNER_NICK = (process.env.OMACHAT_AWAYBOT_OWNER || 'archangel').toLowerCase()
 const ROOM_ID = process.env.OMACHAT_AWAYBOT_ROOM || 'lobby'
 const MODEL = process.env.OMACHAT_AWAYBOT_MODEL || 'mistral-nemo:12b'
 const OLLAMA = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434'
@@ -44,12 +43,12 @@ function makeIdentity(configDir, nick) {
 
 async function ollamaReply(incoming) {
   const system = `You are ${BOT_NICK}, a brief away-message bot for Omarchy Omachat.
-Archangel is AFK. Someone else on another network/machine just messaged the lobby.
+Archangel may be AFK or testing. Someone just messaged the lobby (could be archangel or a visitor).
 Read their message, then reply in 1-3 short sentences:
 1) Start with a friendly hi / greeting
-2) Say archangel is away right now
+2) Say archangel is away / AFK from the human side (even if this message is from archangel — you are the bot stand-in)
 3) Confirm they successfully reached a real peer on an entirely different network (you — a local Ollama/${MODEL} bot), not a dead room
-Do not pretend to be archangel. No markdown. Keep under 400 characters.`
+Do not pretend to be the human archangel. No markdown. Keep under 400 characters.`
 
   const prompt = `${system}
 
@@ -88,7 +87,6 @@ function shouldReply(msg) {
   const nick = String(msg.nick || '').toLowerCase()
   if (!nick) return false
   if (nick === BOT_NICK.toLowerCase()) return false
-  if (nick === OWNER_NICK) return false
   if (msg.pk && msg.pk === identity.publicKeyHex) return false
   // avoid obvious bot-echo loops
   if (/archangel is away|awaybot|ollama/i.test(msg.body) && /hi\b/i.test(msg.body)) return false
@@ -129,7 +127,7 @@ room.on('chat', (msg) => {
 await room.join()
 console.log(`[awaybot] nick=${BOT_NICK} room=#${ROOM_ID} model=${MODEL} ping=${PING_MS}ms`)
 console.log(`[awaybot] config=${CONFIG}`)
-console.log(`[awaybot] ignoring owner nick=${OWNER_NICK}`)
+console.log(`[awaybot] replies to everyone except itself`)
 console.log(`[disco]`, room.discoveryStatus())
 
 async function drainOnce() {

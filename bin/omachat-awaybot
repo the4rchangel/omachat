@@ -6,7 +6,6 @@ BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo 
 ROOT="$(cd "$BIN_DIR/.." && pwd)"
 
 export OMACHAT_AWAYBOT_NICK="${OMACHAT_AWAYBOT_NICK:-archangel-awaybot}"
-export OMACHAT_AWAYBOT_OWNER="${OMACHAT_AWAYBOT_OWNER:-archangel}"
 export OMACHAT_AWAYBOT_ROOM="${OMACHAT_AWAYBOT_ROOM:-lobby}"
 export OMACHAT_AWAYBOT_MODEL="${OMACHAT_AWAYBOT_MODEL:-mistral-nemo:12b}"
 export OMACHAT_AWAYBOT_PING_MS="${OMACHAT_AWAYBOT_PING_MS:-1000}"
