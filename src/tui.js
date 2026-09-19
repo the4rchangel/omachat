@@ -150,15 +150,16 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     })
   }
 
-  function peerLines() {
+  function peerLines(width) {
     const room = session.room
     const nicks = room?.peerNicks?.() || []
-    const lines = [`${BOLD}${identity.nick}${RESET} ${GREEN}(you)${RESET}`]
+    const raw = [`${BOLD}${identity.nick}${RESET} ${GREEN}(you)${RESET}`]
     for (const n of nicks) {
-      if (n !== identity.nick) lines.push(n)
+      if (n !== identity.nick) raw.push(n)
     }
-    if (nicks.length === 0) lines.push(`${GRAY}searching...${RESET}`)
-    return lines
+    if (nicks.length === 0) raw.push(`${GRAY}searching...${RESET}`)
+    const w = Math.max(4, width || PEOPLE_W)
+    return wrapMessageList(raw, w)
   }
 
   function statusText() {
@@ -203,6 +204,7 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     const messages = session.lines(currentRoom())
     const chatInner = Math.max(8, L.chatW - 1)
     const chatLines = wrapMessageList(messages, chatInner).slice(-(L.bodyH - 1))
+    const people = peerLines(L.peopleW).slice(0, L.bodyH - 1)
 
     hideCursor()
     clearScreen()
@@ -239,7 +241,6 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
       if (i === 0) {
         write(`${DIM}${fit(' people', L.peopleW)}${RESET}`)
       } else {
-        const people = peerLines()
         const line = people[i - 1] || ''
         write(fit(line, L.peopleW))
       }
