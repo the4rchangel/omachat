@@ -4,13 +4,11 @@ import os from 'node:os'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 
-const CONFIG_DIR = process.env.OMACHAT_CONFIG
-  || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'omachat')
-
 const NICK_RE = /^[A-Za-z][A-Za-z0-9_-]{0,15}$/
 
 export function configDir() {
-  return CONFIG_DIR
+  return process.env.OMACHAT_CONFIG
+    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'omachat')
 }
 
 export function validNick(nick) {
@@ -18,6 +16,7 @@ export function validNick(nick) {
 }
 
 export function loadOrCreateIdentity() {
+  const CONFIG_DIR = configDir()
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
 
   const seedPath = path.join(CONFIG_DIR, 'identity.seed')
@@ -56,6 +55,7 @@ export function saveNick(nick) {
   if (!validNick(nick)) {
     throw new Error('Invalid nick: start with a letter; max 16; [A-Za-z0-9_-]')
   }
+  const CONFIG_DIR = configDir()
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(CONFIG_DIR, 'nick'), nick + '\n', { mode: 0o600 })
   return nick

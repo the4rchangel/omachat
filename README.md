@@ -103,6 +103,7 @@ omachat #lobby · 1p · alice · dht+mdns:4177
 ```
 ~/.config/omachat/nick
 ~/.config/omachat/identity.seed   # keep private (mode 0600)
+~/.config/omachat/history/*.bin   # AES-GCM encrypted per-room logs (mode 0600)
 ~/.config/omachat/tui-error.log   # only if the TUI throws
 ```
 
@@ -114,21 +115,33 @@ omachat #lobby · 1p · alice · dht+mdns:4177
 | `OMACHAT_NO_MDNS=1` | Disable Avahi |
 | `OMACHAT_NO_TAILSCALE=1` | Disable Tailscale probing |
 
+## Local history (while you are online)
+
+There is still **no chat server**, so offline peers cannot fetch what they missed on the network. What Omachat *does* store is **your client’s view**:
+
+- While the app is running, you stay joined to **#lobby, #ideas, #help, and #ai** (plus any `/join` rooms). Switching panes only changes focus — it does not leave the other rooms.
+- Messages from background rooms are captured; unread counts show on the room list.
+- Chat is written under `~/.config/omachat/history/` encrypted with **AES-256-GCM**. The key is derived from your `identity.seed` (HKDF). Files are mode `0600`.
+- Restarting the app reloads that local history into each room pane.
+
+This is disk encryption at rest on your machine — not E2E against a malicious peer, and not a shared backlog for the whole swarm.
+
 ## Security
 
 - **No chat server.** Discovery uses public HyperDHT bootstraps; chat is peer-to-peer.
 - **Hyperswarm** paths use Noise encryption.
-- **Direct TCP** (mDNS / Tailscale) is cleartext JSON — intended for trusted LAN / tailnet.
+- **Direct TCP** (mDNS / Tailscale) is cleartext JSON — intended for trusted LAN / tailnet. Do not port-forward **4177** to the public internet.
 - **Room name = invite** for v1. Anyone who knows the room name can join that topic.
-- Do not commit or share `identity.seed`.
+- **Local history** is encrypted at rest with a key derived from `identity.seed`. Losing the seed means you cannot decrypt old `history/*.bin` files. Do not commit or share the seed.
 - Legacy Libera IRC launcher (if present): `bin/omachat-irc`.
 
 ## Tests
 
 ```bash
-npm test                 # smoke (two Hyperswarm peers) + TUI key rules
+npm test                 # smoke + TUI keys + encrypted history
 npm run smoke
 npm run keys
+npm run history
 ```
 
 ## Troubleshooting

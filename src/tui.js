@@ -3,13 +3,13 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { Room } from './room.js'
+import { Session } from './session.js'
+import { HistoryStore } from './history.js'
 import { DEFAULT_ROOM, normalizeRoom, listRooms, roomTopic } from './topic.js'
 import b4a from 'b4a'
 import { saveNick, validNick } from './identity.js'
 
 const ROOM_ORDER = ['lobby', 'ideas', 'help', 'ai']
-const NICK_COL = 12
 const ROOMS_W = 16
 const PEOPLE_W = 16
 
@@ -21,13 +21,6 @@ const GREEN = '\x1b[32m'
 const CYAN = '\x1b[36m'
 const YELLOW = '\x1b[33m'
 const GRAY = '\x1b[90m'
-
-function tsShort(ms = Date.now()) {
-  const d = new Date(ms)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mi = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mi}`
-}
 
 function roomLabel(id) {
   return `#${id}`
@@ -44,14 +37,7 @@ function notify(title, body) {
   }
 }
 
-function clampStr(s, n) {
-  const str = String(s)
-  if (str.length <= n) return str.padEnd(n)
-  return str.slice(0, Math.max(0, n - 1)) + '...'
-}
-
 function visibleWidth(s) {
-  // Strip ANSI for length checks.
   return String(s).replace(/\x1b\[[0-9;]*m/g, '').length
 }
 
@@ -60,7 +46,6 @@ function fit(s, width) {
   if (visibleWidth(plain) <= width) {
     return plain + ' '.repeat(Math.max(0, width - visibleWidth(plain)))
   }
-  // Truncate by plain chars (messages are mostly plain after we build them).
   const raw = plain.replace(/\x1b\[[0-9;]*m/g, '')
   return raw.slice(0, Math.max(0, width - 1)) + '...'
 }
@@ -84,28 +69,37 @@ function logError(err, where = 'tui') {
  *   rooms | chat | people
  *   status / input / legend
  *
- * One stdin keypress handler. One draft string. No focus/readInput races.
+ * Stays joined to all default rooms while online; focus switches the pane.
+ * Chat is persisted locally encrypted under ~/.config/omachat/history/.
  */
 export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('Omachat TUI needs an interactive terminal')
   }
 
-  let currentRoom = normalizeRoom(roomId)
-  let room = null
+  const history = new HistoryStore(identity.seed)
+  const session = new Session({
+    identity,
+    history,
+    subscribe: ROOM_ORDER
+  })
+
   let quitting = false
   let draft = ''
   let roomCursor = 0
-  const messages = [] // plain strings already formatted for chat pane
   let cols = process.stdout.columns || 80
   let rows = process.stdout.rows || 24
   let redrawQueued = false
 
   const out = process.stdout
 
+  function currentRoom() {
+    return session.focusId
+  }
+
   function knownRooms() {
-    const ids = [...ROOM_ORDER]
-    if (!ids.includes(currentRoom)) ids.push(currentRoom)
+    const ids = session.roomIds()
+    if (!ids.length) return [...ROOM_ORDER]
     return ids
   }
 
@@ -154,33 +148,8 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     })
   }
 
-  function formatChatLine(msg) {
-    const when = tsShort(msg.ts)
-    const nick = clampStr(msg.nick || '?', NICK_COL)
-    const mine = msg.local || msg.pk === identity.publicKeyHex
-    const nickColored = mine ? `${GREEN}${nick}${RESET}` : `${CYAN}${nick}${RESET}`
-    return `${GRAY}${when}${RESET} ${nickColored} ${msg.body || ''}`
-  }
-
-  function formatSystemLine(text, at = Date.now()) {
-    const when = tsShort(at)
-    const nick = clampStr('*', NICK_COL)
-    return `${GRAY}${when} ${nick} ${text}${RESET}`
-  }
-
-  function pushSystem(text, at) {
-    messages.push(formatSystemLine(text, at))
-    if (messages.length > 1500) messages.splice(0, messages.length - 1200)
-    queueRedraw()
-  }
-
-  function pushChat(msg) {
-    messages.push(formatChatLine(msg))
-    if (messages.length > 1500) messages.splice(0, messages.length - 1200)
-    queueRedraw()
-  }
-
   function peerLines() {
+    const room = session.room
     const nicks = room?.peerNicks?.() || []
     const lines = [`${BOLD}${identity.nick}${RESET} ${GREEN}(you)${RESET}`]
     for (const n of nicks) {
@@ -191,6 +160,7 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
   }
 
   function statusText() {
+    const room = session.room
     const peers = room?.peerCount ?? 0
     const d = room?.discoveryStatus?.() || {}
     const bits = []
@@ -198,11 +168,27 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     if (d.mdns?.ok) bits.push('mdns')
     if (d.tailscale?.ok) bits.push('ts')
     const layers = bits.length ? bits.join('+') : 'connecting'
+    const watching = session.roomIds().length
     return (
-      `${GREEN}${BOLD}omachat${RESET} ${CYAN}${roomLabel(currentRoom)}${RESET}` +
+      `${GREEN}${BOLD}omachat${RESET} ${CYAN}${roomLabel(currentRoom())}${RESET}` +
       ` · ${peers}p · ${identity.nick}` +
-      ` · ${GRAY}${layers}:${d.port || '-'}${RESET}`
+      ` · ${GRAY}${layers}:${d.port || '-'} · ${watching}r hist${RESET}`
     )
+  }
+
+  function roomCell(id, idx, width) {
+    const active = id === currentRoom()
+    const unread = session.unread(id)
+    const mark = active ? `${GREEN}${BOLD}` : CYAN
+    const cursor = idx === roomCursor ? '>' : ' '
+    const badge = (!active && unread > 0) ? ` ${unread > 9 ? '9+' : unread}` : ''
+    const plain = `${cursor}${roomLabel(id)}${badge}`
+    if (!active && unread > 0) {
+      const base = fit(`${cursor}${roomLabel(id)}`, Math.max(4, width - String(badge).length))
+      const rest = fit(badge.trim(), Math.max(1, width - visibleWidth(base)))
+      return `${mark}${base}${YELLOW}${rest}${RESET}`
+    }
+    return `${mark}${fit(plain, width)}${RESET}`
   }
 
   function redraw() {
@@ -211,40 +197,32 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     const L = layout()
     const rooms = knownRooms()
     roomCursor = Math.max(0, Math.min(roomCursor, rooms.length - 1))
+    const messages = session.lines(currentRoom())
 
     hideCursor()
     clearScreen()
 
-    // Body rows
     for (let i = 0; i < L.bodyH; i++) {
       const row = i + 1
 
-      // rooms column
       move(row, 1)
       if (i === 0) {
         write(`${DIM}${fit(' rooms', L.roomsW - 1)}${RESET}│`)
       } else {
         const idx = i - 1
         const id = rooms[idx]
-        let cell = ' '.repeat(L.roomsW - 1)
         if (id) {
-          const active = id === currentRoom
-          const label = roomLabel(id)
-          const mark = active ? `${GREEN}${BOLD}` : CYAN
-          const cursor = idx === roomCursor ? '>' : ' '
-          cell = fit(`${cursor}${label}`, L.roomsW - 1)
-          write(`${mark}${cell}${RESET}`)
+          write(roomCell(id, idx, L.roomsW - 1))
         } else {
-          write(cell)
+          write(' '.repeat(L.roomsW - 1))
         }
         write('│')
       }
 
-      // chat column
       const chatX = L.roomsW + 1
       move(row, chatX)
       if (i === 0) {
-        write(`${DIM}${fit(` ${roomLabel(currentRoom)} `, L.chatW - 1)}${RESET}│`)
+        write(`${DIM}${fit(` ${roomLabel(currentRoom())} `, L.chatW - 1)}${RESET}│`)
       } else {
         const chatLines = messages.slice(-(L.bodyH - 1))
         const line = chatLines[i - 1] || ''
@@ -252,7 +230,6 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
         write('│')
       }
 
-      // people column
       const peopleX = L.roomsW + L.chatW + 1
       move(row, peopleX)
       if (i === 0) {
@@ -264,12 +241,10 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
       }
     }
 
-    // status
     const statusRow = L.bodyH + 1
     move(statusRow, 1)
     write(fit(statusText(), cols))
 
-    // input
     const inputRow = statusRow + 1
     move(inputRow, 1)
     const prompt = `${GREEN}>${RESET} `
@@ -277,7 +252,6 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     const shown = draft.length > usable ? draft.slice(draft.length - usable) : draft
     write(fit(`${prompt}${shown}`, cols))
 
-    // legend (two lines)
     move(inputRow + 1, 1)
     write(fit(
       `${GREEN}${BOLD}omachat${RESET} ${DIM}|${RESET} ${GREEN}Ctrl+N/P${RESET} rooms  ${GREEN}F1-F4${RESET} jump  ${GREEN}↑↓${RESET} select  ${GREEN}Enter${RESET} open/send`,
@@ -289,81 +263,20 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
       cols
     ))
 
-    // place cursor in input
     const cursorCol = Math.min(cols, 3 + Math.min(draft.length, usable))
     move(inputRow, cursorCol)
     showCursor()
   }
 
-  async function openRoom(id, { silent = false } = {}) {
+  async function focusRoom(id) {
     const next = normalizeRoom(id)
-    if (room && next === currentRoom) return
-
-    if (room) {
-      try {
-        await room.leave()
-      } catch (err) {
-        logError(err, 'leave')
-      }
-      room = null
+    if (next === currentRoom() && session.slots.has(next)) {
+      roomCursor = Math.max(0, knownRooms().indexOf(next))
+      queueRedraw()
+      return
     }
-
-    currentRoom = next
-    messages.length = 0
-    const rooms = knownRooms()
-    roomCursor = Math.max(0, rooms.indexOf(currentRoom))
-
-    if (!silent) pushSystem(`joined ${roomLabel(currentRoom)}`)
-
-    room = new Room({
-      identity,
-      roomId: currentRoom,
-      enableMdns: process.env.OMACHAT_NO_MDNS !== '1',
-      enableTailscale: process.env.OMACHAT_NO_TAILSCALE !== '1'
-    })
-
-    const lastDisco = new Map()
-
-    room.on('joined', ({ port }) => {
-      pushSystem(`listening · tcp :${port} · hyperswarm announced`)
-    })
-
-    room.on('discovery', (s) => {
-      if (!s?.layer) return
-      const key = `${s.ok}:${s.detail || ''}`
-      if (lastDisco.get(s.layer) === key) return
-      lastDisco.set(s.layer, key)
-      if (s.layer === 'tailscale' && !s.ok) {
-        queueRedraw()
-        return
-      }
-      if (s.ok) pushSystem(`${s.layer}: ${s.detail}`)
-      else queueRedraw()
-    })
-
-    room.on('peer', () => queueRedraw())
-
-    room.on('presence', (msg) => {
-      if (msg.pk === identity.publicKeyHex) return
-      const via = msg.via ? ` via ${msg.via}` : ''
-      pushSystem(`${msg.nick} is here${via}`, msg.ts)
-    })
-
-    room.on('system', (msg) => {
-      pushSystem(msg.text, msg.ts)
-    })
-
-    room.on('chat', (msg) => {
-      pushChat(msg)
-      if (!(msg.local || msg.pk === identity.publicKeyHex) && identity.nick) {
-        const mention = new RegExp(`(^|\\W)@?${identity.nick}\\b`, 'i')
-        if (mention.test(msg.body || '')) {
-          notify('Omachat mention', `${msg.nick}: ${msg.body}`)
-        }
-      }
-    })
-
-    await room.join()
+    await session.focusRoom(next)
+    roomCursor = Math.max(0, knownRooms().indexOf(currentRoom()))
     queueRedraw()
   }
 
@@ -382,68 +295,73 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
           return
         case 'help':
         case '?':
-          pushSystem('Ctrl+N/P next/prev room · F1-F4 jump · ↑↓ select room · Enter open room or send')
-          pushSystem('/join /rooms /peers /disco /nick /topic /quit')
+          session.pushSystem('Ctrl+N/P next/prev room · F1-F4 jump · ↑↓ select · Enter open/send')
+          session.pushSystem('All default rooms stay joined while you are online; history is local+encrypted.')
+          session.pushSystem('/join /rooms /peers /disco /nick /topic /quit')
           return
         case 'rooms':
-          for (const r of listRooms()) pushSystem(`${roomLabel(r.id).padEnd(10)} ${r.blurb}`)
+          for (const r of listRooms()) {
+            const u = session.unread(r.id)
+            session.pushSystem(`${roomLabel(r.id).padEnd(10)} ${r.blurb}${u ? ` (${u} new)` : ''}`)
+          }
           return
         case 'peers': {
-          const nicks = room?.peerNicks() || []
-          pushSystem(nicks.length ? nicks.join(', ') : 'no peers yet')
+          const nicks = session.room?.peerNicks() || []
+          session.pushSystem(nicks.length ? nicks.join(', ') : 'no peers yet')
           return
         }
         case 'disco':
         case 'discovery':
         case 'status': {
-          const d = room?.discoveryStatus() || {}
-          pushSystem(`port ${d.port ?? '-'} · dht ${d.hyperswarm?.detail || '?'} · mdns ${d.mdns?.detail || '?'} · ts ${d.tailscale?.detail || '?'}`)
+          const d = session.room?.discoveryStatus() || {}
+          session.pushSystem(`port ${d.port ?? '-'} · dht ${d.hyperswarm?.detail || '?'} · mdns ${d.mdns?.detail || '?'} · ts ${d.tailscale?.detail || '?'}`)
+          session.pushSystem(`watching ${session.roomIds().map(roomLabel).join(' ')}`)
           return
         }
         case 'topic':
-          pushSystem(b4a.toString(roomTopic(currentRoom), 'hex'))
+          session.pushSystem(b4a.toString(roomTopic(currentRoom()), 'hex'))
           return
         case 'join':
         case 'room':
         case 'r':
           if (!arg) {
-            pushSystem('usage: /join <room>')
+            session.pushSystem('usage: /join <room>')
             return
           }
-          await openRoom(arg)
+          await focusRoom(arg)
           return
         case 'nick':
         case 'name': {
           if (!validNick(arg)) {
-            pushSystem('invalid nick (letter first, max 16, [A-Za-z0-9_-])')
+            session.pushSystem('invalid nick (letter first, max 16, [A-Za-z0-9_-])')
             return
           }
           const old = identity.nick
           identity.nick = saveNick(arg)
-          room?.announceNick(old)
-          pushSystem(`nick ${old} → ${identity.nick}`)
+          session.announceNick(old)
+          session.pushSystem(`nick ${old} → ${identity.nick}`)
           return
         }
         default:
-          pushSystem('unknown command - /help')
+          session.pushSystem('unknown command - /help')
       }
       return
     }
 
-    if (!room) {
-      pushSystem('not connected to a room yet')
+    if (!session.room) {
+      session.pushSystem('not connected to a room yet')
       return
     }
-    room.say(text)
+    session.say(text)
   }
 
   async function shutdown() {
     if (quitting) return
     quitting = true
     try {
-      await room?.leave()
+      await session.stop()
     } catch (err) {
-      logError(err, 'shutdown-leave')
+      logError(err, 'shutdown-stop')
     }
     cleanupTerminal()
     process.exit(0)
@@ -458,13 +376,13 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
   function jumpRoom(n) {
     const rooms = knownRooms()
     const id = rooms[n - 1]
-    if (id) openRoom(id).catch((err) => logError(err, 'jumpRoom'))
+    if (id) focusRoom(id).catch((err) => logError(err, 'jumpRoom'))
   }
 
   function openSelectedRoom() {
     const id = knownRooms()[roomCursor]
-    if (id && id !== currentRoom) {
-      openRoom(id).catch((err) => logError(err, 'openSelectedRoom'))
+    if (id && id !== currentRoom()) {
+      focusRoom(id).catch((err) => logError(err, 'openSelectedRoom'))
     }
   }
 
@@ -473,25 +391,23 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     if (!key) return
 
     try {
-      // Quit
       if (key.ctrl && key.name === 'c') {
         shutdown()
         return
       }
 
-      // Room navigation
       if (key.ctrl && key.name === 'n') {
         const rooms = knownRooms()
-        const idx = rooms.indexOf(currentRoom)
+        const idx = rooms.indexOf(currentRoom())
         const next = rooms[(idx + 1) % rooms.length]
-        openRoom(next).catch((err) => logError(err, 'ctrl-n'))
+        focusRoom(next).catch((err) => logError(err, 'ctrl-n'))
         return
       }
       if (key.ctrl && key.name === 'p') {
         const rooms = knownRooms()
-        const idx = rooms.indexOf(currentRoom)
+        const idx = rooms.indexOf(currentRoom())
         const next = rooms[(idx - 1 + rooms.length) % rooms.length]
-        openRoom(next).catch((err) => logError(err, 'ctrl-p'))
+        focusRoom(next).catch((err) => logError(err, 'ctrl-p'))
         return
       }
 
@@ -509,7 +425,6 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
         return
       }
 
-      // Enter: if draft empty, open highlighted room; else send message
       if (key.name === 'return' || key.name === 'enter') {
         if (!draft) {
           openSelectedRoom()
@@ -536,7 +451,6 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
         return
       }
 
-      // Printable character (ignore controls / meta)
       if (ch && !key.ctrl && !key.meta && ch >= ' ' && ch !== '\x7f') {
         if (draft.length < 2000) {
           draft += ch
@@ -560,7 +474,24 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     }
   }
 
-  // --- boot ---
+  session.on('lines', ({ roomId }) => {
+    if (roomId === currentRoom()) queueRedraw()
+  })
+  session.on('peer', ({ roomId }) => {
+    if (roomId === currentRoom()) queueRedraw()
+  })
+  session.on('unread', () => queueRedraw())
+  session.on('focus', () => queueRedraw())
+  session.on('chat', ({ roomId, focused, msg }) => {
+    if (focused) return
+    if (!(msg.local || msg.pk === identity.publicKeyHex) && identity.nick) {
+      const mention = new RegExp(`(^|\\W)@?${identity.nick}\\b`, 'i')
+      if (mention.test(msg.body || '')) {
+        notify(`Omachat #${roomId}`, `${msg.nick}: ${msg.body}`)
+      }
+    }
+  })
+
   emitKeypressEvents(process.stdin)
   process.stdin.setRawMode(true)
   process.stdin.resume()
@@ -570,11 +501,11 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
 
   process.on('uncaughtException', (err) => {
     logError(err, 'uncaughtException')
-    pushSystem(`error: ${err.message || err}`)
+    session.pushSystem(`error: ${err.message || err}`)
   })
   process.on('unhandledRejection', (err) => {
     logError(err, 'unhandledRejection')
-    pushSystem(`error: ${err?.message || err}`)
+    session.pushSystem(`error: ${err?.message || err}`)
   })
 
   const onSignal = () => { shutdown() }
@@ -582,8 +513,8 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
   process.once('SIGTERM', onSignal)
 
   hideCursor()
-  await openRoom(currentRoom, { silent: true })
-  pushSystem(`welcome ${identity.nick}`)
-  pushSystem('type a message and press Enter · /help for commands')
+  await session.start(normalizeRoom(roomId))
+  session.pushSystem(`welcome ${identity.nick}`)
+  session.pushSystem('watching lobby/ideas/help/ai · history encrypted locally · /help')
   queueRedraw()
 }

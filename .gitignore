@@ -8,6 +8,7 @@ yarn-error.log*
 identity.seed
 *.seed
 tui-error.log
+history/
 
 # Editor / OS
 *.swp
