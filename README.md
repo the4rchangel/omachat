@@ -8,13 +8,33 @@ Join a named room, find peers over Hyperswarm (global), Avahi mDNS (LAN), and/or
 
 ## How it works
 
-| Layer | When it helps |
-|-------|----------------|
-| **Hyperswarm / HyperDHT** | Anywhere on the internet (UDP + holepunch) |
-| **mDNS (Avahi)** | Same LAN — fast direct TCP |
-| **Tailscale** | Shared tailnet — probes TCP **4177** |
+| Layer | When it helps | Needs port forward? |
+|-------|----------------|---------------------|
+| **Hyperswarm / HyperDHT** | Anywhere on the internet (UDP + holepunch) | **No** — do not forward ports for this |
+| **mDNS (Avahi)** | Same LAN — direct TCP on **4177** | No — LAN only; forwarding does nothing useful |
+| **Tailscale** | Shared tailnet — probes TCP **4177** | No — Tailscale is the tunnel |
 
 Same room name = same topic. There is no Omarchy-operated chat server and no message history when you are offline.
+
+### Reachability (are you findable from the internet?)
+
+**TCP 4177 is not your “public chat port.”** It is only for LAN mDNS and Tailscale shortcuts (cleartext). Strangers on the internet do **not** connect to it, and Omachat has no “enter my IP:4177” mode. Forwarding 4177 to the world exposes an unauthenticated cleartext listener — **don’t**.
+
+Global reachability goes through **Hyperswarm**:
+
+1. Both peers announce the same room topic on the public HyperDHT.
+2. They try a **direct UDP holepunch** (and Hyperswarm’s usual fallbacks). That uses ephemeral/local UDP, not a fixed forwarded TCP port.
+3. If holepunch fails (some corporate/symmetric NATs), peers may still connect via slower relay-style paths Hyperswarm provides — or they may never meet.
+
+**How to know it works from outside your network**
+
+| Check | Meaning |
+|-------|---------|
+| Status shows `dht` / `/disco` says hyperswarm `topic announced` | You registered on the DHT. **Not** proof that someone else can open a stream to you. |
+| Peer count goes from `0p` → `1p+` when a friend joins `#lobby` from another network | **This** is the real test. |
+| Friend never appears after ~30s on a normal home connection | DHT blocked, hostile NAT, or they joined a different room name. |
+
+Practical test: phone hotspot or a friend’s home PC, same room (`lobby`), both online at the same time. If you see each other, you’re reachable enough for Omachat’s global path — no router port map required.
 
 ## Requirements
 
@@ -169,9 +189,21 @@ You are alone until another peer joins the **same room** with a working discover
 2. Check discovery: type `/disco` in the TUI.
 3. **Same machine test:** run a second peer with a different config and port (see [Run](#run)).
 4. **LAN:** ensure Avahi is running (`systemctl status avahi-daemon`). Disable with `OMACHAT_NO_MDNS=1` if it misbehaves.
-5. **Internet:** Hyperswarm needs outbound UDP. Corporate / captive portals often block DHT and holepunch — try from a normal home network.
+5. **Internet:** Hyperswarm needs **outbound** UDP to public DHT/bootstrap nodes. Corporate / captive portals often block this — try a normal home network or phone hotspot. You do **not** need to forward TCP 4177 (see [Reachability](#reachability-are-you-findable-from-the-internet)).
 6. **Tailscale:** both peers must be on the same tailnet; status should mention `ts` when probing works. Skip with `OMACHAT_NO_TAILSCALE=1` if Tailscale is installed but unused.
 7. Wait 10–30 seconds after join; DHT announcements are not instant.
+
+### Do I need to forward port 4177?
+
+**No** for chatting with people on the public internet. That path is Hyperswarm (DHT + UDP holepunch), not inbound TCP to 4177.
+
+Forwarding 4177:
+
+- Does **not** make Hyperswarm “more reachable.”
+- Does **not** help mDNS (multicast stays on your LAN).
+- Only makes the cleartext direct listener visible on your WAN IP — which Omachat peers never look up by public IP anyway.
+
+Use Tailscale (or stay on LAN) if you want the direct-TCP shortcut across sites. Leave consumer router port forwarding alone.
 
 ### Port already in use (`EADDRINUSE` / listen fails)
 
