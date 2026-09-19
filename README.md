@@ -73,7 +73,7 @@ What you get:
 |-------|------|
 | `omachat.service` | Headless daemon — stays joined to lobby/ideas/help/ai, encrypted history, desktop notifications |
 | `omachat-tray.service` | Tray icon in Omarchy’s SystemTray — Open chat, notify mode, Quit daemon |
-| TUI attach | `omachat` / app menu opens the window against the daemon; **closing the window leaves you online** |
+| TUI attach | `omachat` / app menu opens the window against the daemon; **closing the window leaves you online**. If the daemon was quit, opening Omachat starts it (and the tray) again. |
 
 Notifications use `omarchy-notification-send`. Tray menu can switch all-room / mentions-only / off.
 
