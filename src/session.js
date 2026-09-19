@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { Room } from './room.js'
 import { HistoryStore } from './history.js'
 import { normalizeRoom, ROOMS, DEFAULT_ROOM } from './topic.js'
+import { formatTimestamp } from './time.js'
 
 const DEFAULT_SUBSCRIBE = Object.keys(ROOMS)
 
@@ -226,7 +227,7 @@ function trimLines(slot, max = 1500) {
 
 function formatStored(entry, myPk) {
   if (entry.type === 'system') return formatSystem(entry.body, entry.ts)
-  const when = tsShort(entry.ts)
+  const when = formatTimestamp(entry.ts)
   const nick = clampStr(entry.nick || '?', 12)
   const mine = entry.local || entry.pk === myPk
   const GREEN = '\x1b[32m'
@@ -240,16 +241,9 @@ function formatStored(entry, myPk) {
 function formatSystem(text, at = Date.now()) {
   const GRAY = '\x1b[90m'
   const RESET = '\x1b[0m'
-  const when = tsShort(at)
+  const when = formatTimestamp(at)
   const nick = clampStr('*', 12)
   return `${GRAY}${when} ${nick} ${text}${RESET}`
-}
-
-function tsShort(ms = Date.now()) {
-  const d = new Date(ms)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mi = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mi}`
 }
 
 function clampStr(s, n) {
