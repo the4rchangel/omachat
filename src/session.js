@@ -148,13 +148,16 @@ export class Session extends EventEmitter {
     this.slots.clear()
     this.started = false
     this._directDiscoveryAssigned = false
-    await Promise.all(rooms.map(async (slot) => {
-      try {
-        await slot.room.leave()
-      } catch {
-        // ignore
-      }
-    }))
+    await Promise.race([
+      Promise.all(rooms.map(async (slot) => {
+        try {
+          await slot.room.leave()
+        } catch {
+          // ignore
+        }
+      })),
+      new Promise((resolve) => setTimeout(resolve, 2500))
+    ])
   }
 
   #wire(slot) {

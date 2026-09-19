@@ -217,7 +217,13 @@ async function main() {
     console.log(`[omachat-daemon] listening · watching ${ROOM_ORDER.join(',')}`)
   })
 
+  let shuttingDown = false
   async function shutdown(code = 0) {
+    if (shuttingDown) return
+    shuttingDown = true
+    // Never block forever on Hyperswarm teardown — systemd stop would hang.
+    const hard = setTimeout(() => process.exit(code), 3000)
+    hard.unref?.()
     try {
       server.close()
     } catch {
@@ -238,11 +244,12 @@ async function main() {
     } catch {
       // ignore
     }
+    clearTimeout(hard)
     process.exit(code)
   }
 
-  process.on('SIGINT', () => shutdown(0))
-  process.on('SIGTERM', () => shutdown(0))
+  process.on('SIGINT', () => { shutdown(0) })
+  process.on('SIGTERM', () => { shutdown(0) })
 }
 
 main().catch((err) => {

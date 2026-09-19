@@ -318,13 +318,17 @@ export class Room extends EventEmitter {
     this.direct = null
 
     if (this.swarm) {
+      const swarm = this.swarm
+      this.swarm = null
       try {
-        await this.swarm.destroy()
+        await Promise.race([
+          swarm.destroy(),
+          new Promise((resolve) => setTimeout(resolve, 1500))
+        ])
       } catch {
         // ignore
       }
     }
-    this.swarm = null
 
     for (const conn of [...this.peers.keys()]) {
       try {

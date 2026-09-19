@@ -27,6 +27,10 @@ WorkingDirectory=$ROOT
 ExecStart=/usr/bin/node $ROOT/src/daemon.js
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=8
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
 
 [Install]
 WantedBy=default.target
