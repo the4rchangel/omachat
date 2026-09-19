@@ -126,9 +126,22 @@ main() {
 
   local room="${1:-lobby}"
   gum style --foreground 2 "Joining Omachat #$room as $nick…"
-  sleep 0.2
-  # Run the TUI directly — no tmux wrapper. The app draws its own legend.
-  # If the daemon is running, the TUI attaches and closing the window keeps you online.
+
+  # If the daemon was quit from the tray, bring it (and tray) back before the TUI.
+  local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omachat.sock"
+  if [[ ! -S $sock ]]; then
+    if systemctl --user start omachat.service 2>/dev/null; then
+      gum style --foreground 2 "Starting Omachat daemon…"
+      systemctl --user start omachat-tray.service 2>/dev/null || true
+      for _ in $(seq 1 50); do
+        [[ -S $sock ]] && break
+        sleep 0.2
+      done
+    fi
+  fi
+
+  sleep 0.1
+  # TUI attaches to the daemon when available; closing the window keeps you online.
   exec node "$NODE_ENTRY" --nick "$nick" "$room"
 }
 

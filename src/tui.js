@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { Session } from './session.js'
 import { RemoteSession } from './remote-session.js'
+import { ensureDaemonRunning } from './ensure-daemon.js'
 import { HistoryStore } from './history.js'
 import { DEFAULT_ROOM, normalizeRoom, listRooms, roomTopic } from './topic.js'
 import b4a from 'b4a'
@@ -78,7 +79,7 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     throw new Error('Omachat TUI needs an interactive terminal')
   }
 
-  let session = await RemoteSession.tryConnect()
+  let session = await ensureDaemonRunning()
   let attached = Boolean(session)
   if (!session) {
     const history = new HistoryStore(identity.seed)
