@@ -1,0 +1,124 @@
+#!/bin/bash
+# omachat — Omarchy peer-to-peer community chat (Hyperswarm)
+# omarchy:summary=Join the Omachat P2P lobby
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omachat"
+NICK_FILE="$CONFIG_DIR/nick"
+
+BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+
+resolve_root() {
+  if [[ -n ${OMACHAT_HOME:-} && -f ${OMACHAT_HOME}/src/cli.js ]]; then
+    printf '%s\n' "$(cd "$OMACHAT_HOME" && pwd)"
+    return
+  fi
+  if [[ -f $BIN_DIR/../src/cli.js ]]; then
+    printf '%s\n' "$(cd "$BIN_DIR/.." && pwd)"
+    return
+  fi
+  if [[ -f $HOME/Projects/omachat/src/cli.js ]]; then
+    printf '%s\n' "$HOME/Projects/omachat"
+    return
+  fi
+  return 1
+}
+
+ROOT_DIR="$(resolve_root)" || {
+  printf 'Cannot find Omachat app. Set OMACHAT_HOME or install under ~/Projects/omachat\n' >&2
+  exit 1
+}
+NODE_ENTRY="$ROOT_DIR/src/cli.js"
+
+mkdir -p "$CONFIG_DIR"
+
+show_logo() {
+  clear
+  printf '\033[32m'
+  cat <<'EOF'
+   ██████╗ ███╗   ███╗ █████╗  ██████╗██╗  ██╗ █████╗ ████████╗
+  ██╔═══██╗████╗ ████║██╔══██╗██╔════╝██║  ██║██╔══██╗╚══██╔══╝
+  ██║   ██║██╔████╔██║███████║██║     ███████║███████║   ██║
+  ██║   ██║██║╚██╔╝██║██╔══██║██║     ██╔══██║██╔══██║   ██║
+  ╚██████╔╝██║ ╚═╝ ██║██║  ██║╚██████╗██║  ██║██║  ██║   ██║
+   ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
+
+  Omarchy community chat · Hyperswarm + mDNS + Tailscale · no chat server
+EOF
+  printf '\033[0m\n'
+}
+
+valid_nick() {
+  local nick="$1"
+  [[ ${#nick} -ge 1 && ${#nick} -le 16 ]] || return 1
+  [[ "$nick" == [A-Za-z]* ]] || return 1
+  [[ "$nick" != *[!A-Za-z0-9_-]* ]]
+}
+
+pick_nick() {
+  local nick="" prompt="Pick a username"
+
+  while true; do
+    nick=$(gum input --prompt "Username> " --placeholder "e.g. ricewizard" --header "$prompt" || true)
+    nick="${nick#"${nick%%[![:space:]]*}"}"
+    nick="${nick%"${nick##*[![:space:]]}"}"
+
+    if [[ -z $nick ]]; then
+      gum style --foreground 1 "Username required."
+      prompt="Try again — letters first, then letters/numbers/_/-"
+      continue
+    fi
+    if ! valid_nick "$nick"; then
+      gum style --foreground 1 "Invalid nick. Start with a letter; max 16 chars; no spaces."
+      prompt="Try again"
+      continue
+    fi
+    break
+  done
+
+  printf '%s\n' "$nick" >"$NICK_FILE"
+}
+
+require_deps() {
+  local missing=()
+  command -v node >/dev/null || missing+=(nodejs)
+  command -v gum >/dev/null || missing+=(gum)
+  if [[ ! -f $NODE_ENTRY ]]; then
+    printf 'Missing Omachat app at %s\n' "$NODE_ENTRY" >&2
+    exit 1
+  fi
+  if [[ ! -d $ROOT_DIR/node_modules/hyperswarm ]]; then
+    printf 'Dependencies missing. Run: cd %s && npm install\n' "$ROOT_DIR" >&2
+    exit 1
+  fi
+  if ((${#missing[@]})); then
+    printf 'Missing: %s\nInstall with: omarchy pkg add %s\n' "${missing[*]}" "${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+main() {
+  require_deps
+  show_logo
+
+  local nick=""
+  if [[ -f $NICK_FILE ]]; then
+    nick=$(<"$NICK_FILE")
+    gum style --foreground 2 "Saved username: $nick"
+    if gum confirm --default=false "Change username?"; then
+      pick_nick
+      nick=$(<"$NICK_FILE")
+    fi
+  else
+    pick_nick
+    nick=$(<"$NICK_FILE")
+  fi
+
+  local room="${1:-lobby}"
+  gum style --foreground 2 "Joining Omachat #$room as $nick…"
+  sleep 0.2
+  # Run the TUI directly — no tmux wrapper. The app draws its own legend.
+  exec node "$NODE_ENTRY" --nick "$nick" "$room"
+}
+
+main "$@"

@@ -1,0 +1,36 @@
+#!/bin/bash
+# Omarchy highlight → desktop notification (quoted env; no shell injection).
+set -euo pipefail
+
+# Already looking at this buffer — don't toast.
+if [[ ${HERE:-0} == "1" ]]; then
+  exit 0
+fi
+
+escape() {
+  printf '%s' "$1" | sed 's#\\#\\\\#g'
+}
+
+buffer=${BUFFER-}
+sender=${SENDER-}
+message=${MESSAGE-}
+
+urgency="normal"
+# Query/DM buffers are nick names (no leading #).
+if [[ $buffer != \#* && -n $buffer ]]; then
+  urgency="critical"
+fi
+
+headline=$(escape "${sender} in ${buffer}")
+body=$(escape "$message")
+
+omachat_bin="${OMACHAT_BIN:-$HOME/.local/bin/omachat}"
+
+exec omarchy-notification-send \
+  --app-name Omachat \
+  -g $'󰍩' \
+  -u "$urgency" \
+  -t 10000 \
+  "$headline" \
+  "$body" \
+  --exec omarchy-launch-or-focus-tui --app-id=org.omarchy.omachat "$omachat_bin"

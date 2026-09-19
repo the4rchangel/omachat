@@ -1,0 +1,59 @@
+#!/bin/bash
+# Sync senpai colors from the active Omarchy theme (theme-set hook: $1 = theme slug).
+set -euo pipefail
+
+THEME_SLUG=${1-}
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omachat"
+COLORS_FILE="$CONFIG_DIR/colors.scfg"
+SENPAI_CONFIG="$CONFIG_DIR/senpai.scfg"
+THEME_COLORS="${HOME}/.local/state/omarchy/current/theme/colors.toml"
+
+mkdir -p "$CONFIG_DIR"
+
+if [[ ! -f $THEME_COLORS ]]; then
+  exit 0
+fi
+
+get_color() {
+  local key=$1
+  sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$THEME_COLORS" | head -n1
+}
+
+accent=$(get_color accent)
+fg=$(get_color foreground)
+muted=$(get_color dark_foreground)
+unread=$(get_color yellow)
+[[ -n $unread ]] || unread=$(get_color orange)
+[[ -n $accent ]] || exit 0
+[[ -n $fg ]] || fg=$accent
+[[ -n $muted ]] || muted=$fg
+[[ -n $unread ]] || unread=$accent
+
+cat >"$COLORS_FILE" <<EOF
+colors {
+    prompt $accent
+    unread $unread
+    status $muted
+    nicks extended
+}
+EOF
+
+# Refresh embedded colors block in senpai.scfg when present (next connect picks it up).
+if [[ -f $SENPAI_CONFIG ]]; then
+  tmp=$(mktemp)
+  awk '
+    BEGIN { skip=0 }
+    /^colors \{/ { skip=1; next }
+    skip==1 && /^\}/ { skip=0; next }
+    skip==1 { next }
+    { print }
+  ' "$SENPAI_CONFIG" >"$tmp"
+  cat "$tmp" "$COLORS_FILE" >"$SENPAI_CONFIG"
+  rm -f "$tmp"
+fi
+
+# Optional toast when theme changes while chatting is installed.
+if command -v omarchy-notification-send >/dev/null && [[ -n $THEME_SLUG ]]; then
+  omarchy-notification-send --app-name Omachat -g $'󰍩' -u low -t 4000 \
+    "Omachat theme" "Synced to ${THEME_SLUG}. Reopen chat if colors look stale." >/dev/null 2>&1 || true
+fi

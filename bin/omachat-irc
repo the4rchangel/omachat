@@ -1,0 +1,195 @@
+#!/bin/bash
+# Omachat — Omarchy-native IRC lobby (Libera), terminal UX.
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omachat"
+NICK_FILE="$CONFIG_DIR/nick"
+SENPAI_CONFIG="$CONFIG_DIR/senpai.scfg"
+COLORS_FILE="$CONFIG_DIR/colors.scfg"
+HIGHLIGHT_SCRIPT="$CONFIG_DIR/highlight"
+NETWORK="${OMACHAT_NETWORK:-irc.libera.chat}"
+TMUX_SESSION="omachat"
+APP_ID="org.omarchy.omachat"
+HOME_CHANNEL="#omachat"
+
+CHANNELS=(
+  "#omachat"
+  "#omachat-ideas"
+  "#omachat-help"
+  "#omachat-ai"
+)
+
+BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+HIGHLIGHT_SRC="${BIN_DIR}/omachat-highlight"
+THEME_SYNC_SRC="${BIN_DIR}/omachat-theme-sync"
+
+mkdir -p "$CONFIG_DIR"
+
+show_logo() {
+  clear
+  printf '\033[32m'
+  cat <<'EOF'
+   ██████╗ ███╗   ███╗ █████╗  ██████╗██╗  ██╗ █████╗ ████████╗
+  ██╔═══██╗████╗ ████║██╔══██╗██╔════╝██║  ██║██╔══██╗╚══██╔══╝
+  ██║   ██║██╔████╔██║███████║██║     ███████║███████║   ██║
+  ██║   ██║██║╚██╔╝██║██╔══██║██║     ██╔══██║██╔══██║   ██║
+  ╚██████╔╝██║ ╚═╝ ██║██║  ██║╚██████╗██║  ██║██║  ██║   ██║
+   ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
+
+  Omarchy community chat · Libera IRC · no server to host
+EOF
+  printf '\033[0m\n'
+}
+
+valid_nick() {
+  local nick="$1"
+  [[ ${#nick} -ge 1 && ${#nick} -le 16 ]] || return 1
+  [[ "$nick" == [A-Za-z]* ]] || return 1
+  [[ "$nick" != *[!A-Za-z0-9_-]* ]]
+}
+
+pick_nick() {
+  local nick="" prompt="Pick a username (IRC nick)"
+
+  while true; do
+    nick=$(gum input --prompt "Username> " --placeholder "e.g. ricewizard" --header "$prompt" || true)
+    nick="${nick#"${nick%%[![:space:]]*}"}"
+    nick="${nick%"${nick##*[![:space:]]}"}"
+
+    if [[ -z $nick ]]; then
+      gum style --foreground 1 "Username required."
+      prompt="Try again — letters first, then letters/numbers/_/-"
+      continue
+    fi
+    if ! valid_nick "$nick"; then
+      gum style --foreground 1 "Invalid nick. Start with a letter; max 16 chars; no spaces."
+      prompt="Try again"
+      continue
+    fi
+    break
+  done
+
+  printf '%s\n' "$nick" >"$NICK_FILE"
+}
+
+ensure_highlight() {
+  if [[ -x $HIGHLIGHT_SRC ]]; then
+    install -Dm755 "$HIGHLIGHT_SRC" "$HIGHLIGHT_SCRIPT"
+  fi
+}
+
+ensure_theme_colors() {
+  if [[ -x $THEME_SYNC_SRC ]]; then
+    "$THEME_SYNC_SRC" >/dev/null 2>&1 || true
+  fi
+  if [[ ! -f $COLORS_FILE ]]; then
+    cat >"$COLORS_FILE" <<'EOF'
+colors {
+    nicks extended
+}
+EOF
+  fi
+}
+
+write_senpai_config() {
+  local nick="$1"
+  ensure_highlight
+  ensure_theme_colors
+
+  {
+    echo "address ircs://$NETWORK"
+    echo "nickname $nick"
+    echo "realname Omachat"
+    for ch in "${CHANNELS[@]}"; do
+      echo "channel $ch"
+    done
+    echo "on-highlight-beep true"
+    if [[ -x $HIGHLIGHT_SCRIPT ]]; then
+      echo "on-highlight-path $HIGHLIGHT_SCRIPT"
+    fi
+    cat <<'EOF'
+pane-widths {
+    nicknames 14
+    channels 18
+    members 16
+}
+EOF
+    cat "$COLORS_FILE"
+  } >"$SENPAI_CONFIG"
+}
+
+require_deps() {
+  local missing=()
+  command -v senpai >/dev/null || missing+=(senpai)
+  command -v gum >/dev/null || missing+=(gum)
+  command -v tmux >/dev/null || missing+=(tmux)
+  if ((${#missing[@]})); then
+    printf 'Missing: %s\nInstall with: omarchy pkg add %s\n' "${missing[*]}" "${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+configure_tmux_legend() {
+  local target="$1"
+  tmux set-option -t "$target" status 2
+  tmux set-option -t "$target" status-position bottom
+  tmux set-option -t "$target" status-style "bg=default,fg=green"
+  tmux set-option -t "$target" status-left ""
+  tmux set-option -t "$target" status-right ""
+  tmux set-option -t "$target" status-interval 0
+  tmux set-option -t "$target" status-justify left
+  tmux set-option -t "$target" status-format[0] \
+    "#[fg=green,bold] omachat #[fg=green,dim]|#[default]#[fg=green] C-n/C-p rooms  Alt-1..9 jump  C-k find room  S-←/→ unread  F7 rooms  F8 people"
+  tmux set-option -t "$target" status-format[1] \
+    "#[fg=green,dim]|#[default]#[fg=green] /msg nick hi = DM   /MUTE = quiet room   /NICK name   C-c then Enter = quit   /HELP"
+}
+
+jump_into_lobby() {
+  local target="$1"
+  local channel="$2"
+  (
+    sleep 2
+    tmux send-keys -t "$target" "/buffer ${channel}" Enter 2>/dev/null || exit 0
+    sleep 1
+    tmux send-keys -t "$target" "/PIN" Enter 2>/dev/null || true
+    sleep 0.3
+    tmux send-keys -t "$target" "/buffer ${channel}" Enter 2>/dev/null || true
+  ) &
+}
+
+run_chat() {
+  tmux has-session -t "=$TMUX_SESSION" 2>/dev/null && tmux kill-session -t "=$TMUX_SESSION" 2>/dev/null || true
+
+  tmux new-session -d -s "$TMUX_SESSION" -n chat \
+    "senpai -config $(printf '%q' "$SENPAI_CONFIG"); tmux kill-session -t $(printf '%q' "$TMUX_SESSION") 2>/dev/null"
+
+  configure_tmux_legend "$TMUX_SESSION"
+  jump_into_lobby "${TMUX_SESSION}:chat" "$HOME_CHANNEL"
+
+  exec tmux attach-session -t "=$TMUX_SESSION"
+}
+
+main() {
+  require_deps
+  show_logo
+
+  local nick=""
+  if [[ -f $NICK_FILE ]]; then
+    nick=$(<"$NICK_FILE")
+    gum style --foreground 2 "Saved username: $nick"
+    if gum confirm --default=false "Change username?"; then
+      pick_nick
+      nick=$(<"$NICK_FILE")
+    fi
+  else
+    pick_nick
+    nick=$(<"$NICK_FILE")
+  fi
+
+  write_senpai_config "$nick"
+  gum style --foreground 2 "Joining Omachat rooms as $nick…"
+  sleep 0.35
+  run_chat
+}
+
+main "$@"

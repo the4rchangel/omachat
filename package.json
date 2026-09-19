@@ -1,0 +1,33 @@
+{
+  "name": "omachat",
+  "version": "0.1.0",
+  "description": "Peer-to-peer chat for Omarchy — Hyperswarm discovery, no chat server",
+  "main": "src/cli.js",
+  "scripts": {
+    "start": "node src/cli.js",
+    "omachat": "node src/cli.js",
+    "smoke": "node scripts/smoke.js",
+    "keys": "node scripts/tui-keys-test.js",
+    "test": "npm run smoke && npm run keys"
+  },
+  "keywords": [
+    "omarchy",
+    "p2p",
+    "hyperswarm",
+    "chat"
+  ],
+  "author": "Omachat contributors",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "b4a": "^1.9.0",
+    "hypercore-crypto": "^3.7.0",
+    "hyperswarm": "^4.17.1"
+  },
+  "bin": {
+    "omachat": "./bin/omachat.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

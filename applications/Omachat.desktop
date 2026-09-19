@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Name=Omachat
+GenericName=Community Chat
+Comment=Omarchy peer-to-peer community chat (Hyperswarm + mDNS + Tailscale)
+Exec=omarchy-launch-or-focus-tui --app-id=org.omarchy.omachat omachat
+Terminal=false
+Type=Application
+Icon=omachat
+Categories=Network;Chat;ConsoleOnly;
+Keywords=omarchy;chat;p2p;hyperswarm;mdns;tailscale;omachat;community;tui;
+StartupNotify=true
