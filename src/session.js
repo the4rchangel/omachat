@@ -4,6 +4,8 @@ import { HistoryStore } from './history.js'
 import { normalizeRoom, ROOMS, DEFAULT_ROOM } from './topic.js'
 import { formatTimestamp } from './time.js'
 
+const NICK_COL = 18
+
 const DEFAULT_SUBSCRIBE = Object.keys(ROOMS)
 
 /**
@@ -228,7 +230,7 @@ function trimLines(slot, max = 1500) {
 function formatStored(entry, myPk) {
   if (entry.type === 'system') return formatSystem(entry.body, entry.ts)
   const when = formatTimestamp(entry.ts)
-  const nick = clampStr(entry.nick || '?', 12)
+  const nick = padNick(entry.nick || '?')
   const mine = entry.local || entry.pk === myPk
   const GREEN = '\x1b[32m'
   const CYAN = '\x1b[36m'
@@ -242,14 +244,14 @@ function formatSystem(text, at = Date.now()) {
   const GRAY = '\x1b[90m'
   const RESET = '\x1b[0m'
   const when = formatTimestamp(at)
-  const nick = clampStr('*', 12)
+  const nick = padNick('*')
   return `${GRAY}${when} ${nick} ${text}${RESET}`
 }
 
-function clampStr(s, n) {
+function padNick(s) {
   const str = String(s)
-  if (str.length <= n) return str.padEnd(n)
-  return str.slice(0, Math.max(0, n - 1)) + '...'
+  if (str.length >= NICK_COL) return str
+  return str.padEnd(NICK_COL)
 }
 
 /**

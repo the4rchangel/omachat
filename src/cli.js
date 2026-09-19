@@ -66,7 +66,7 @@ async function main(argv) {
 
   if (nickArg) {
     if (!validNick(nickArg)) {
-      console.error('Invalid nick: letter first, max 16, [A-Za-z0-9_-]')
+      console.error('Invalid nick: letter first, max 24, [A-Za-z0-9_-]')
       process.exit(1)
     }
     identity.nick = saveNick(nickArg)

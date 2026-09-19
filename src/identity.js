@@ -4,7 +4,7 @@ import os from 'node:os'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 
-const NICK_RE = /^[A-Za-z][A-Za-z0-9_-]{0,15}$/
+const NICK_RE = /^[A-Za-z][A-Za-z0-9_-]{0,23}$/
 
 export function configDir() {
   return process.env.OMACHAT_CONFIG
@@ -53,7 +53,7 @@ export function loadOrCreateIdentity() {
 
 export function saveNick(nick) {
   if (!validNick(nick)) {
-    throw new Error('Invalid nick: start with a letter; max 16; [A-Za-z0-9_-]')
+    throw new Error('Invalid nick: start with a letter; max 24; [A-Za-z0-9_-]')
   }
   const CONFIG_DIR = configDir()
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })

@@ -10,6 +10,7 @@ import { HistoryStore } from './history.js'
 import { DEFAULT_ROOM, normalizeRoom, listRooms, roomTopic } from './topic.js'
 import b4a from 'b4a'
 import { saveNick, validNick } from './identity.js'
+import { fitWidth, wrapMessageList, visibleWidth as visW } from './wrap.js'
 
 const ROOM_ORDER = ['lobby', 'ideas', 'help', 'ai']
 const ROOMS_W = 16
@@ -40,16 +41,11 @@ function notify(title, body) {
 }
 
 function visibleWidth(s) {
-  return String(s).replace(/\x1b\[[0-9;]*m/g, '').length
+  return visW(s)
 }
 
 function fit(s, width) {
-  const plain = String(s)
-  if (visibleWidth(plain) <= width) {
-    return plain + ' '.repeat(Math.max(0, width - visibleWidth(plain)))
-  }
-  const raw = plain.replace(/\x1b\[[0-9;]*m/g, '')
-  return raw.slice(0, Math.max(0, width - 1)) + '...'
+  return fitWidth(s, width)
 }
 
 function logError(err, where = 'tui') {
@@ -205,6 +201,8 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
     const rooms = knownRooms()
     roomCursor = Math.max(0, Math.min(roomCursor, rooms.length - 1))
     const messages = session.lines(currentRoom())
+    const chatInner = Math.max(8, L.chatW - 1)
+    const chatLines = wrapMessageList(messages, chatInner).slice(-(L.bodyH - 1))
 
     hideCursor()
     clearScreen()
@@ -229,11 +227,10 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
       const chatX = L.roomsW + 1
       move(row, chatX)
       if (i === 0) {
-        write(`${DIM}${fit(` ${roomLabel(currentRoom())} `, L.chatW - 1)}${RESET}│`)
+        write(`${DIM}${fit(` ${roomLabel(currentRoom())} `, chatInner)}${RESET}│`)
       } else {
-        const chatLines = messages.slice(-(L.bodyH - 1))
         const line = chatLines[i - 1] || ''
-        write(fit(line, L.chatW - 1))
+        write(fit(line, chatInner))
         write('│')
       }
 
@@ -342,7 +339,7 @@ export async function runTui({ identity, roomId = DEFAULT_ROOM }) {
         case 'nick':
         case 'name': {
           if (!validNick(arg)) {
-            session.pushSystem('invalid nick (letter first, max 16, [A-Za-z0-9_-])')
+            session.pushSystem('invalid nick (letter first, max 24, [A-Za-z0-9_-])')
             return
           }
           const old = identity.nick

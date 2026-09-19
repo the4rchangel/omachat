@@ -1,0 +1,23 @@
+#!/bin/bash
+# omachat-awaybot — AFK Ollama bot peer for Omachat
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+ROOT="$(cd "$BIN_DIR/.." && pwd)"
+
+export OMACHAT_AWAYBOT_NICK="${OMACHAT_AWAYBOT_NICK:-archangel-awaybot}"
+export OMACHAT_AWAYBOT_OWNER="${OMACHAT_AWAYBOT_OWNER:-archangel}"
+export OMACHAT_AWAYBOT_ROOM="${OMACHAT_AWAYBOT_ROOM:-lobby}"
+export OMACHAT_AWAYBOT_MODEL="${OMACHAT_AWAYBOT_MODEL:-mistral-nemo:12b}"
+export OMACHAT_AWAYBOT_PING_MS="${OMACHAT_AWAYBOT_PING_MS:-1000}"
+export OMACHAT_CONFIG="${OMACHAT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/omachat-awaybot}"
+# Prefer a free direct port so we don't fight the main daemon on 4177
+export OMACHAT_PORT="${OMACHAT_PORT:-4187}"
+
+if ! curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null; then
+  printf 'Ollama is not reachable at %s — start it first.\n' "${OLLAMA_HOST:-http://127.0.0.1:11434}" >&2
+  exit 1
+fi
+
+cd "$ROOT"
+exec node "$ROOT/bots/awaybot.js" "$@"
